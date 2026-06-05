@@ -1,0 +1,566 @@
+---
+title: "STA141B-HW3"
+author: "Stella Liu"
+date: "2026-05-13"
+output:
+  pdf_document:
+    latex_engine: xelatex
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r, results='asis', echo=FALSE, warning = FALSE, message = FALSE}
+library(DBI)
+library(RSQLite)
+library(ggplot2)
+library(dplyr)
+library(knitr)
+
+con <- dbConnect(RSQLite::SQLite(), "C:/Users/stela/Downloads/UCD Class/STA141B/stats.stackexchange.db")
+
+dbListTables(con)
+
+set.seed(1)
+```
+
+Assignment 3: 
+
+#Question 1: What is the date range for the questions and answers in this database?
+
+```{r, echo=FALSE}
+kable(dbGetQuery(con, "
+SELECT 
+  MIN(CreationDate) AS earliest,
+  MAX(CreationDate) AS latest
+FROM Posts
+WHERE PostTypeId IN (1,2);
+"))
+```
+
+For finding the date range for the questions and answers in the dataset, we use the Posts table and look at the variable CreationDate to capture both beginning and end dates. We use the MAX() MIN() functions to find maximum and the minimum CreationDate, which stands for the earliest and latest recorded dates, marking the range. The data range returned is from Feburary 2nd 2009 T14:21:12.103 to March 5th 2023 T05:10:18.393.
+
+#Question 2: How many users are there? How many users joined since 2020? How many users joined each year? Describe this with a plot.
+
+```{r, echo=FALSE}
+kable(dbGetQuery(con, "
+SELECT COUNT(*) AS total_users
+FROM Users;
+"))
+
+kable(dbGetQuery(con, "
+SELECT COUNT(*) AS users_since_2020
+FROM Users
+WHERE CreationDate >= '2020-01-01';
+"))
+
+kable(users_year <- dbGetQuery(con, "
+SELECT 
+  strftime('%Y', CreationDate) AS year,
+  COUNT(*) AS n_users
+FROM Users
+GROUP BY year
+ORDER BY year;
+"))
+
+plot(as.numeric(users_year$year), users_year$n_users,
+     type = "b",
+     xlab = "Year",
+     ylab = "Number of Users",
+     main = "Users Joined Per Year")
+```
+
+To find the amount of users, we count total number of users from the Users table, returning 321677 total users. 
+
+By adding a condition of CreationDate >= '2020-01-01', we find users who has CreationDate later than 2020, returning 100796 users. 
+
+After grouping and ordering, extracting the year portion of the timestamp with strftime('%Y', CreationDate) AS year, we get the plot above describing the amount of users joined each year, numbers peaking in 2017.
+
+#Question 3: What user answered the most questions?
+
+```{r, echo=FALSE}
+kable(dbGetQuery(con, "
+SELECT u.DisplayName, u.Id, COUNT(*) AS n_answers
+FROM Posts p
+JOIN Users u ON p.OwnerUserId = u.Id
+WHERE p.PostTypeId = 2
+GROUP BY u.Id
+ORDER BY n_answers DESC
+LIMIT 1;
+"))
+```
+
+To find what user answered the most questions, we find the user with highest answer count. To do that we first join the Posts and Users table to be able to return both the person's name and Id. We then group under PostTypeId=2 by Id and count how many answers each user has, returning the list with limit 1, showing only the highest individual which is Glen\_b with 4733 answers.
+
+#Question 4: How many users have asked at least one question?
+
+```{r, echo=FALSE}
+kable(dbGetQuery(con, "
+SELECT COUNT(DISTINCT OwnerUserId) AS askers
+FROM Posts
+WHERE PostTypeId = 1;
+"))
+```
+
+To find how many users asked at least one question, we find distinct users with PostTypeId=1 from the Posts table, locating single users that have asked questions as least once, returning 88924 users. 
+
+#• How many have only answered questions?
+
+```{r, echo=FALSE}
+kable(dbGetQuery(con, "
+SELECT COUNT(DISTINCT OwnerUserId) AS only_answered
+FROM Posts
+WHERE PostTypeId = 2
+AND OwnerUserId NOT IN (
+  SELECT OwnerUserId FROM Posts WHERE PostTypeId = 1
+);
+"))
+```
+
+To find how many only answered questions, we find distinct users with PostTypeId=2 from the Posts table, identifying all those who has answered questions. By then using OwnerUserId NOT IN(), we exclude those who has asked questions, leaving us with those who have only answered, returning 14488 users.  
+
+#• How many have only commented?
+
+```{r, echo=FALSE}
+kable(dbGetQuery(con, "
+SELECT COUNT(DISTINCT UserId) AS only_commented
+FROM Comments
+WHERE UserId NOT IN (
+  SELECT OwnerUserId FROM Posts
+);
+"))
+```
+
+To find how many only commented, we find distinct users with PostTypeId=2 from the Comments table, identifying all those who has commented. By then using OwnerUserId NOT IN(), we exclude those who has posted questions or answers, leaving us with those who have only commented, returning 5008 users.  
+
+#• How many have not posted anything (question, answer or comment)?
+
+```{r, echo=FALSE}
+kable(dbGetQuery(con, "
+SELECT COUNT(*) AS inactive_users
+FROM Users
+WHERE Id NOT IN (
+  SELECT OwnerUserId FROM Posts
+)
+AND Id NOT IN (
+  SELECT UserId FROM Comments
+);
+"))
+```
+
+To find how many have not posted anything, we count users from the Users table, excluding all those who has commented and posted by identifying Ids not in the Posts or Comments table, returning 213251 users.  
+
+
+#Question 5: How many different types of posts are there in the Posts table? Get the description of the types from the PostTypes table.
+
+```{r, echo=FALSE}
+kable(dbGetQuery(con, "
+SELECT 
+    pt.Value AS PostDescription, 
+    COUNT(*) AS Count
+FROM Posts p
+JOIN PostTypeIdMap pt ON p.PostTypeId = pt.Id
+GROUP BY pt.Value;
+"))
+```
+
+To find how many different types of posts there are in the Posts table, we count them and join PostTypeIdMap pt onto the PostTypeId column, connecting the numeric Id with the readable description. After that, group by pt.Value to ensure each post type is unique in the summary, folding them into unique categories.
+
+#Question 6: How long does it take to get the first response to a question? the accepted answer? the last response? How many questions received no response? What percentage is this of all posts?
+
+```{r, echo=FALSE}
+kable(dbGetQuery(con, "
+SELECT AVG(
+  julianday(a.CreationDate) - julianday(q.CreationDate)
+) AS avg_first_response_days
+FROM Posts q
+JOIN Posts a ON a.ParentId = q.Id
+WHERE q.PostTypeId = 1
+AND a.PostTypeId = 2;
+"))
+
+kable(dbGetQuery(con, "
+SELECT AVG(
+  julianday(a.CreationDate) - julianday(q.CreationDate)
+) AS avg_accepted_time
+FROM Posts q
+JOIN Posts a ON q.AcceptedAnswerId = a.Id
+WHERE q.PostTypeId = 1;
+"))
+
+kable(dbGetQuery(con, "
+SELECT AVG(last_response - julianday(q.CreationDate)) AS avg_last_response
+FROM (
+  SELECT ParentId, MAX(julianday(CreationDate)) AS last_response
+  FROM Posts
+  WHERE PostTypeId = 2
+  GROUP BY ParentId
+) a
+JOIN Posts q ON q.Id = a.ParentId;
+"))
+
+kable(dbGetQuery(con, "
+SELECT COUNT(*) AS no_response
+FROM Posts q
+WHERE PostTypeId = 1
+AND Id NOT IN (
+  SELECT ParentId FROM Posts WHERE PostTypeId = 2
+);
+"))
+
+kable(dbGetQuery(con, "
+SELECT 
+  100.0 * SUM(CASE 
+    WHEN Id NOT IN (
+      SELECT ParentId FROM Posts WHERE PostTypeId = 2
+    ) THEN 1 ELSE 0 END
+  ) / COUNT(*) AS pct_no_response
+FROM Posts;
+"))
+```
+
+Here we use julianday() functions to turn strings into numbers.
+
+To find how long it takes to get the first response to a question, we find the average of the difference between CreationDate of answer and of question with matching ParentId and Id, returning 145.1716 days. 
+
+The accepted answer uses AcceptedAnswerId in the Posts table, returning 25.3062 days. 
+
+The last response difference between last_response and CreationDate of question, returning 156.9997. 
+
+No response questions are found by finding questions PostTypeId=1 with no corresponding entry answers PostTypeId=2, returning 66970 question, which is 66.09249\% of all posts, done by using SUM(CASE) to flag unanswered questions into binary, then diving the sum by the total post count.
+
+#Question 7: What are the top 50 most common tags on questions? For each of the top 50 tags on questions, how many questions are there for each tag.
+
+```{r, echo=FALSE}
+kable(dbGetQuery(con, "
+SELECT Tag, COUNT(*) AS QuestionCount
+FROM TagPosts
+GROUP BY Tag
+ORDER BY QuestionCount DESC
+LIMIT 50;
+"))
+```
+
+By selecting tags from table TagPosts, grouping them and ordering by question count, and limiting the return to 50 to return the top 50 most common tags.
+
+#Question 8: What is the distribution of the number of responses to questions? And the number of comments for each question?
+
+```{r, echo=FALSE}
+q8 <- dbGetQuery(con, "
+SELECT 
+    p.Id, 
+    p.AnswerCount, 
+    p.CommentCount
+FROM Posts p
+WHERE p.PostTypeId = 1;
+")
+kable(head(q8, 20))
+
+hist(q8$AnswerCount, breaks=30, main="Distribution of Answers", xlab="Answers per Question")
+hist(q8$CommentCount, breaks=30, main="Distribution of Comments", xlab="Comments per Question")
+```
+
+Select Id, AnswerCount, and CommentCount from the Posts table under PostTypeId=1, then graph histograms respectively. 
+
+The distribution of answers is heavily right-skewed, peaking at around 0 to 1 answers per question.
+
+The distribution of comments is also right-skewed, peaking at around 0 to 1 comments per question.
+
+#Question 9: How many questions are there each year?
+
+```{r, echo=FALSE}
+kable(dbGetQuery(con, "
+SELECT strftime('%Y', CreationDate) AS Year, COUNT(*) AS QuestionCount
+FROM Posts
+WHERE PostTypeId = 1
+GROUP BY Year;
+"))
+```
+
+Convert CreationDate to string and extract the year, group by year and count for QuestionCount from the Posts table under PostTypeId=1, focusing on the original questions without comments and answers.
+
+#Question 10: How many posts are there per question per year? Draw the distribution of the number of posts per question for each year (e.g., density plots, boxplots, violin plots) Has the distbution changed over time?
+
+```{r, echo=FALSE}
+q10 <- dbGetQuery(con, "
+SELECT 
+    strftime('%Y', q.CreationDate) AS Year,
+    (q.AnswerCount + q.CommentCount) AS PostCount
+FROM Posts q
+WHERE q.PostTypeId = 1;
+")
+kable(head(q10, 20))
+
+ggplot(q10, aes(x = Year, y = PostCount)) +
+  geom_boxplot() +
+  coord_cartesian(ylim = c(0, 15)) +
+  labs(title = "Boxplot: Post Distribution per Year", 
+       y = "Posts", x = "Year") +
+  theme_minimal()
+
+ggplot(q10, aes(x = Year, y = PostCount)) +
+  geom_violin() +
+  coord_cartesian(ylim = c(0, 15)) +
+  labs(title = "Violin Plot: Post Density per Year", 
+       y = "Posts", x = "Year") +
+  theme_minimal()
+
+ggplot(q10, aes(x = PostCount)) +
+  geom_density() +
+  facet_wrap(~Year) +
+  coord_cartesian(xlim = c(0, 10)) +
+  labs(title = "Density Plot: Post Distribution per Year", 
+       x = "Posts", y = "Density") +
+  theme_minimal()
+```
+
+Convert CreationDate to string and extract the year, group by year and count for PostCount by finding the sum of AnswerCount and CommentCount from the Posts table under PostTypeId=1, focusing on the original questions without comments and answers. 
+
+The distribution is relatively stable throughout. The boxplot shows a unusually high number of posts in 2009, while it stabilizes in later years. In the violin plot we also see that post density per year increases, reaching a high around 2015-2022, at a low in 2009. The density plot shows that post distribution every year has a right-skewed distribution, all but 2009, which has a constant low density of posts. 
+
+#Question 11: How many questions have each of the following terms: Neural network, classification tree, ANOVA, boosting, bagging, clustering, multiple testing?
+
+```{r, echo=FALSE}
+keywords <- c("Neural network", "classification tree", "ANOVA", "boosting", "bagging", "clustering", "multiple testing")
+
+q11 <- data.frame(Term = keywords, Count = NA)
+
+for(i in 1:length(keywords)) {
+  query <- sprintf("
+    SELECT COUNT(*) 
+    FROM Posts 
+    WHERE PostTypeId = 1 
+    AND (Body LIKE '%%%s%%' OR Title LIKE '%%%s%%')", 
+    keywords[i], keywords[i])
+  
+  q11$Count[i] <- dbGetQuery(con, query)[1,1]
+}
+
+kable(head(q11, 20))
+```
+
+To find how many questions there are for each of the following terms, we set them as keywords, for each keyword, we loop through the Posts table under PostTypeId=1, looking in both the title and the body of the Posts table.
+
+#Question 12: Using the Posts and PostLinks tables, how many questions gave rise to a related or duplicate question? And how many responses did these questions get? How experienced were the users posting these questions.
+
+```{r, echo=FALSE}
+q12 <- dbGetQuery(con, "
+SELECT 
+    q.Id, 
+    LinkTypeId,
+    q.AnswerCount,
+    u.Reputation
+FROM Posts q
+JOIN PostLinks pl ON q.Id = pl.PostId
+JOIN Users u ON q.OwnerUserId = u.Id
+WHERE q.PostTypeId = 1
+AND pl.LinkTypeId IN (1, 3)  -- Filter for Related (1) or Duplicate (3)
+GROUP BY q.Id;
+")
+kable(head(q12, 20))
+
+total_questions <- nrow(q12)
+print(paste("Number of questions that gave rise to a related or duplicate question:", total_questions))
+```
+
+Link the tables, we discover that LinkTypeId=1 is Related, =3 is Duplicate, group by q.Id to remove duplicate counts. We put results into table to show results, include AnswerCount to answer how many responses these questions get, include Reputation to answer how experienced the users posting these questions were. For total number of questions, we count total row number, getting 48100 questions.
+
+#Question 13: Compute the table that contains
+<!-- • the question, -->
+<!-- • the name of the user who posted it, -->
+<!-- • when that user joined, -->
+<!-- • their location -->
+<!-- • the date the question was first posted, -->
+<!-- • the accepted answer, -->
+<!-- • when it was posted -->
+<!-- • the name of the user who answered -->
+
+```{r, echo=FALSE}
+q13 <- dbGetQuery(con, "
+SELECT 
+    q.Title AS QuestionTitle,
+    u_ask.DisplayName AS AskerName,
+    u_ask.CreationDate AS AskerJoined,
+    u_ask.Location AS AskerLocation,
+    q.CreationDate AS QuestionDate,
+    a.Body AS AcceptedAnswerBody,
+    a.CreationDate AS AnswerDate,
+    u_ans.DisplayName AS AnswererName
+FROM Posts q
+JOIN Users u_ask ON q.OwnerUserId = u_ask.Id
+JOIN Posts a ON q.AcceptedAnswerId = a.Id
+JOIN Users u_ans ON a.OwnerUserId = u_ans.Id
+WHERE q.PostTypeId = 1 
+AND q.AcceptedAnswerId IS NOT NULL
+LIMIT 100;
+")
+kable(head(q13, 10))
+```
+
+Join the Users table, q for questions and a for answers, linking them with q.AcceptedAnswerId = a.Id. By using 'u_a'sk and 'u_ans', we put data for both into the same row, using IS NOT NULL to avoid empty values, only including pairs with both porblem and answer posted. Lastly, we return table with the desired variables included. 
+
+#Question 14: Compute the table with information for the 75 users with the most accepted answers. This table should include
+<!-- • the user’s display name, -->
+<!-- • account creation date, -->
+<!-- • location, -->
+<!-- • the number of badges they have won, -->
+<!-- • the names of the badges (as a single string) -->
+<!-- • the dates of the earliest and most recent accepted answer (as two columns/fields) -->
+<!-- • the (unique) tags for all the questions for which they had the accepted answer (as a single string) -->
+
+```{r, echo=FALSE}
+subset_75 <- "
+SELECT 
+    u.Id,
+    u.DisplayName,
+    u.CreationDate AS AccountCreated,
+    u.Location,
+    COUNT(q.AcceptedAnswerId) AS AcceptedCount,
+    MIN(a.CreationDate) AS EarliestAcceptedAnswer,
+    MAX(a.CreationDate) AS RecentAcceptedAnswer
+FROM Users u
+JOIN Posts a ON u.Id = a.OwnerUserId
+JOIN Posts q ON a.Id = q.AcceptedAnswerId
+WHERE a.PostTypeId = 2
+GROUP BY u.Id
+ORDER BY AcceptedCount DESC
+LIMIT 75;
+"
+q14 <- dbGetQuery(con, subset_75)
+
+target_ids <- paste(q14$Id, collapse = ",")
+
+q14_final <- kable(dbGetQuery(con, "
+WITH Subset AS (
+    SELECT 
+        u.Id, u.DisplayName, u.CreationDate, u.Location,
+        COUNT(q.Id) AS AcceptedCount,
+        MIN(a.CreationDate) AS EarliestAccepted,
+        MAX(a.CreationDate) AS RecentAccepted
+    FROM Users u
+    JOIN Posts a ON u.Id = a.OwnerUserId
+    JOIN Posts q ON a.Id = q.AcceptedAnswerId
+    WHERE a.PostTypeId = 2
+    GROUP BY u.Id
+    ORDER BY AcceptedCount DESC
+    LIMIT 75
+)
+SELECT 
+    te.*,
+    (SELECT COUNT(*) FROM Badges b WHERE b.UserId = te.Id) AS TotalBadges,
+    (SELECT GROUP_CONCAT(DISTINCT Name) FROM Badges b WHERE b.UserId = te.Id) AS BadgeNames,
+    (SELECT GROUP_CONCAT(DISTINCT tp.Tag) 
+     FROM TagPosts tp 
+     JOIN Posts p ON tp.Id = p.Id 
+     WHERE p.OwnerUserId = te.Id AND p.Id IN (SELECT AcceptedAnswerId FROM Posts)) AS UniqueTags
+FROM Subset te;
+"))
+kable(head(q14_final, 10))
+```
+
+To shorten runtime and increase efficiency, we first find the subset of the top 75 users based on the accepted answer count. 
+
+We create a string of Ids to use, get basic info for those 75 users. We use the MIN() MAX() function to identify the lifespan of a user. We join users, their answers and the question, under the condition that the answer was the accepted answer. 
+
+We use 'GROUP_CONCAT' to put multiple badge rows into a single string separated by commas for each user. 
+
+We had a aggregates much have exactly one argument error, this is because joining Posts and Badges created repeats of the same badge, thus we incorporate DISTINCT to eliminate duplicate entries. 
+
+#Question 15: Is there any relationship between the number of tags on a question, the length of the question, and the number of responses (posts and comments)?
+
+```{r, echo=FALSE}
+q15 <- dbGetQuery(con, "
+SELECT 
+    Id,
+    AnswerCount + CommentCount AS ResponseCount,
+    LENGTH(Body) AS QuestionLength,
+    (LENGTH(Tags) - LENGTH(REPLACE(Tags, '<', ''))) AS TagCount
+FROM Posts
+WHERE PostTypeId = 1;
+")
+
+ggplot(q15, aes(x = QuestionLength, y = ResponseCount)) +
+  geom_jitter(alpha = 0.1, color = "midnightblue") +
+  geom_smooth(method = "lm", color = "red") +
+  scale_x_log10() + 
+  coord_cartesian(ylim = c(0, 20)) +
+  facet_wrap(~TagCount, labeller = label_both) +
+  labs(title = "Response count vs. Question length, Split by Tag count",
+       x = "Question length (Log Scale)", 
+       y = "Response count") +
+  theme_minimal()
+
+ggplot(q15, aes(x = as.factor(TagCount), y = QuestionLength)) +
+  geom_boxplot(aes(fill = as.factor(TagCount)), outlier.alpha = 0.1) +
+  scale_y_log10() +
+  labs(title = "Tag count vs. Question length",
+       x = "Tag count", 
+       y = "Question length (Log Scale)",
+       fill = "Tag Count") +
+  theme_minimal()
+```
+
+To inspect the relationship between the number of tags on a question, the length of the question, and the number of responses (posts and comments), we first get our data from the Posts table. We get the tag count by subtracting the length of the Tag string without the \< character. We get the length of the question through finding the length of the body. We get the response count by finding the sum of answer post counts and comment counts. 
+
+To visualize, we plot for response count versus question length split by tag count, scaling question length by log scale during this, we see that they have roughly the same distribution, but response count typically increases as question length increases. We also plot for tag count and question length, where we see that question length are on average higher for questions that have more tags. 
+
+
+#Question 16: How does the presence of a bounty influence the number of responses? the speed of getting an answer? an answer being accepted? And how does the amount of the bounty influence these?
+
+```{r, echo=FALSE}
+q16 <- dbGetQuery(con, "
+SELECT 
+    q.Id,
+    q.AnswerCount,
+    q.AcceptedAnswerId,
+    v.BountyAmount,
+    CASE WHEN v.BountyAmount IS NOT NULL THEN 1 ELSE 0 END AS HasBounty,
+    MIN(julianday(a.CreationDate) - julianday(q.CreationDate)) * 24 AS HoursToFirstAnswer
+FROM Posts q
+LEFT JOIN Votes v ON q.Id = v.PostId AND v.VoteTypeId = 8
+LEFT JOIN Posts a ON q.Id = a.ParentId AND a.PostTypeId = 2
+WHERE q.PostTypeId = 1
+GROUP BY q.Id;
+")
+
+t.test(AnswerCount ~ HasBounty, data = q16)
+```
+
+```{r, echo=FALSE}
+ggplot(q16, aes(x=as.factor(HasBounty), y=AnswerCount, fill=as.factor(HasBounty))) +
+  geom_boxplot() +
+  scale_x_discrete(labels=c("0" = "No Bounty", "1" = "Bounty")) +
+  labs(title="Bounty vs.Number of Answers", 
+      y="Number of Answers") +
+  theme_minimal()
+
+ggplot(q16 %>% filter(HoursToFirstAnswer > 0), 
+       aes(x=BountyAmount, y=HoursToFirstAnswer)) +
+  geom_point(alpha=0.2, color="purple") +
+  geom_smooth(method="lm", color="black") +
+  coord_cartesian(ylim = c(0, 500)) + 
+  labs(title="Bounty Amount vs. Speed", 
+       x="Bounty Amount", y="Hours to First Answer")
+```
+
+The presence of a bounty lowers the number of answers and increases the speed of getting an answer. With a higher bounty amount, the distribution of hours to first answer clusters closer to 0, suggesting the speed of getting an answer is getting faster. 
+
+```{r, results='asis', echo=FALSE}
+dbDisconnect(con)
+```
+
+```{r, results='asis', echo=FALSE}
+cat("\\newpage") #new page
+```
+
+I used Gemini, chat link: https://gemini.google.com/app/f2c115ab78e65473 
+
+I check the code output by trying it and visualizing output, I also ask it to explain the output code line by line so I'm not blindly copy pasting, but actually learning the code and understanding each line and function's purpose. 
+There were many redundancies in code that was given as feedback, I often edited those out and reformatted for personal consistency. 
+I worked on this assignment on and off throughout the weeks, intensifying to around 3 hours everyday since the Friday before the deadline.
+
+# Appendix: R code
+
+```{r, ref.label=knitr::all_labels(),echo=TRUE,eval=FALSE}
+```

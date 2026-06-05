@@ -1,0 +1,184 @@
+---
+title: "STA141B-HW1"
+author: "Stella Liu"
+date: "2026-04-13"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r, results='asis', echo=FALSE, warning = FALSE, message = FALSE}
+set.seed(1)
+```
+
+Assignment 1: Reading and Verifying Wireless Data
+
+```{r, results='asis', echo=FALSE}
+ff <- list.files("C:/Users/stela/Downloads/UCD Class/STA141B/",pattern="\\.gz$",full.names = TRUE)
+ff[1]
+```
+
+```{r, results='asis', echo=FALSE}
+offline_data = readLines(ff[1])
+# check to understand data strcture 
+offline_data[1]
+offline_data[5]
+```
+
+### Write a top-level function to read data 
+
+```{r, results='asis', echo=FALSE}
+#function
+readWirelessDataset=function(path) {
+  x=readLines(gzfile(path))
+  
+  #empty for storing
+  all_rows=list()
+  all_cols=c()
+
+  parsed_rows=list()
+
+  #loop for each scan obs
+  for (i in seq_along(x)){
+    
+    #if empty, skip
+    if (nchar(x[i])==0) next
+    
+    #split by ; between elements
+    parts <- strsplit(x[i], ";")[[1]]
+    #split by = between value title and value content 
+    kv <- strsplit(parts,"=", fixed=TRUE)
+
+    #take out value titles and content as characters 
+    keys <- sapply(kv, function(z) z[1])
+    vals <- sapply(kv, function(z) if (length(z) > 1) as.character(z[2]) else NA_character_)
+
+    #skip line if missing time and id
+    if (!any(keys=="t")||!any(keys=="id")) next
+
+    #create base while suppressing warning
+    row=list(
+      time   = suppressWarnings(as.numeric(vals[keys == "t"])),
+      id     = vals[keys == "id"],
+      pos    = vals[keys == "pos"],
+      degree = suppressWarnings(as.numeric(vals[keys == "degree"]))
+    )
+
+    #the rest is for wifi signal, mac ID
+    mac_idx <- !(keys %in% c("t", "id", "pos", "degree"))
+
+    if (any(mac_idx)) {
+      
+      #take out value titles and content
+      mac_keys <- keys[mac_idx]
+      mac_vals <- vals[mac_idx]
+      
+      #loop for each entry
+      for (j in seq_along(mac_keys)) {
+        
+        #create column name
+        col_name <- paste0("signal_", mac_keys[j])
+
+        #convert content to character string
+        val=as.character(mac_vals[j])
+
+        #split by , 
+        #convert to numerical, suppress warning, assign NA if empty
+        if (!is.na(val) && val != "") {
+          signal_parts <- strsplit(val, ",")[[1]]
+          row[[col_name]] <- suppressWarnings(as.numeric(signal_parts[1]))
+        } else {
+          row[[col_name]]=NA
+        }
+        all_cols <- unique(c(all_cols, col_name))
+      }
+    }
+    
+    #store all rows to list
+    parsed_rows[[length(parsed_rows) + 1]]=row
+  }
+
+  #combine into data frame
+  df <- do.call(rbind, lapply(parsed_rows, function(r) {
+    #assign NA if row missing a column
+    for (col in all_cols) {
+      if (!col %in% names(r)) r[[col]]=NA
+    }
+    as.data.frame(r, stringsAsFactors=FALSE)
+  }))
+
+  #clean row names
+  rownames(df)=NULL
+
+  return(df)
+}
+```
+
+### Verify that it works correctly by (1) carefully checking the logic of the code, (2) analyzing the results and verifying they make sense and correct.
+
+```{r, results='asis', echo=FALSE}
+df=readWirelessDataset("C:/Users/stela/Downloads/UCD Class/STA141B/offline.gz")
+
+str(df)
+
+head(df,6)
+```
+
+```{r, results='asis', echo=FALSE}
+colMeans(is.na(df))
+
+summary(df$signal_00.14.bf.b1.97.8a)
+```
+
+```{r, results='asis', echo=FALSE}
+hist(df$signal_00.14.bf.b1.97.8a,
+     main = "WiFi Signal Strength Distribution",
+     xlab = "Signal Strength")
+```
+
+```{r, results='asis', echo=FALSE}
+plot(df$time, df$degree,
+     main = "Device Orientation Over Time",
+     xlab = "Time",
+     ylab = "Degree")
+```
+
+### Write a report
+
+### Describing your overall approach and each of the steps to read the data and identifying each function that corresponds to each step.
+
+The dataset contains multiple entries of wireless scan observations, each scan includes key variables such as time, id, position, and degree for orientation; it also includes WiFi signal measurements, identified by MAC addresses and associated with signal strength, frequency, and additional measurement information. 
+
+The strategy for approach reading the data is by using the readLines function for the gzfile, treating each line as a scan entry when reading the compressed file, separating them as individual observations of character strings.
+
+Then for parsing, the approach is to split each line into different components divided by the ";", using strsplit we split by identifying the semi column and parting each value (time, id, pos, degree), excluding the WiFi signal entries in the end. Then we separate the component title and the value content by parting the strings by "=". Before the = is the value title, after it is the corresponding value content. 
+
+The remaining components is for WiFi measurement. Take the string for signal information out and store corresponding to the specific MAC address, setting the address as a column name. Split the measurements by ",", converting them to numerical values, storing them in the generated columns of the output data frame.
+
+Throughout the process, we incorporate warning suppression and fill missing values with NA to ensure a consistent structure. 
+
+In the end, we parse all rows and combined into a single data frame using row binding. 
+
+### Detailing why we should consider the code is correct. This should contain (1) many summaries of the data - plots and numerical summaries as appropriate, (2) What “corner” cases each function handles.
+
+This code is correct, based on the structural consistency and validation of the resulting data frame output. The final output data frame is rectangular, with 146080 observations and 25 variables. In the final output, each row corresponds to a scan and each column corresponds to a variable. This structure is consistent with the expected. 
+
+There are no NAs in the four key variables (time, id, pos, degree), confirming that the core information is reliable and complete, while the signal columns understandably consist of some missing values. The signal strength typically ranges roughly between strong -30 to weak -90, consistent with the standard, distribution is visualized with histogram above. Device orientation over time is also visualized above.
+
+Some "corner" cases include the missing values and empty entries. There were large amounts of empty values in the signal columns, and relatively less for core variables. Empty lines were skipped for completeness, where core variable values are missing, the lines were ignored as incomplete entries. Empty values were filled and store as NA to ensure the same structure with padding. Non-numerical signals were dealt with by converting them into numeric entries and using warning suppression. 
+
+Citation: https://chatgpt.com/share/69ddc721-7ecc-83e8-b9f7-0da8827ca373 
+
+
+```{r, results='asis', echo=FALSE}
+cat("\\newpage") #new page
+```
+
+# Appendix: R code
+
+```{r, ref.label=knitr::all_labels(),echo=TRUE,eval=FALSE}
+```

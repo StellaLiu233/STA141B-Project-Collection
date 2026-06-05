@@ -1,0 +1,624 @@
+---
+title: "STA141B-HW5"
+author: "Stella Liu"
+date: "2026-06-04"
+output:
+  pdf_document:
+    latex_engine: xelatex
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r, results='asis', echo=FALSE, warning = FALSE, message = FALSE}
+library(XML)
+library(dplyr)
+library(stringr)
+library(knitr)
+library(kableExtra)
+```
+
+```{r, results='asis', echo=FALSE, warning = FALSE, message = FALSE}
+escape_latex_strings <- function(text_vector) {
+    if (is.character(text_vector)) {
+        text_vector <- gsub("\\\\", "/", text_vector)        # backslashes first
+        text_vector <- gsub("_", "\\\\_", text_vector)
+        text_vector <- gsub("%", "\\\\%", text_vector)
+        text_vector <- gsub("\\$", "\\\\$", text_vector)
+        text_vector <- gsub("\\^", "\\\\^{}", text_vector)
+        text_vector <- gsub("&", "\\\\&", text_vector)
+        text_vector <- gsub("#", "\\\\#", text_vector)
+        text_vector <- gsub("\\{", "\\\\{", text_vector)
+        text_vector <- gsub("\\}", "\\\\}", text_vector)
+        text_vector <- gsub("~", "\\\\textasciitilde{}", text_vector)
+        text_vector <- gsub("<", "\\\\textless{}", text_vector)
+        text_vector <- gsub(">", "\\\\textgreater{}", text_vector)
+    }
+    return(text_vector)
+}
+
+sanitize_df_for_latex <- function(df) {
+  if (nrow(df) == 0) return(df)
+  # Safely sanitize column headers
+  colnames(df) <- gsub("_", "\\\\_", colnames(df))
+  # Safely sanitize cell contents
+  df <- df %>% mutate(across(where(is.character), escape_latex_strings))
+  return(df)
+}
+```
+
+Assignment 5: 
+
+Computes the total number of questions from the front page
+
+```{r, results='asis', echo=FALSE, warning = FALSE, message = FALSE}
+#manual change force refresh or not
+force_refresh <- TRUE
+
+cache_dir <- "stats_cache_html"
+if (!dir.exists(cache_dir)) dir.create(cache_dir)
+
+first_page_file <- file.path(cache_dir, "list_page_1.html")
+if (!file.exists(first_page_file)) {
+    live_url <- "https://stats.stackexchange.com/questions?tab=newest&page=1"
+    download.file(live_url, destfile = first_page_file, quiet = TRUE)
+}
+initial_doc <- htmlParse(first_page_file, isURL = FALSE)
+
+total_questions_raw <- xpathSApply(initial_doc, "//div[contains(@class, 'd-flex') and contains(@class, 'ai-center')]//div[contains(@class, 'fs-body3') or contains(@class, 'flex--item')]/text()", xmlValue)
+
+#get total number on front page
+clean_number_string <- gsub("[^0-9]", "", total_questions_raw[1])
+global_total_questions <- as.integer(clean_number_string)
+cat("### Total Questions:", global_total_questions, "\n")
+
+all_question_urls <- character()
+current_page <- 1
+
+#manual change number of questions you want to use 
+N <- 15
+
+#find number of questions per page and default use that 
+page_size_raw <- xpathSApply(initial_doc, "//div[contains(@class, 'page-sizer')]//a[contains(@class, 'is-selected')]/text()", xmlValue)
+detected_page_size <- if(length(page_size_raw) > 0) as.numeric(trimws(page_size_raw[1])) else 15
+
+max_questions <- if(!is.null(N)) N else detected_page_size
+
+#loop through 
+while(length(all_question_urls) < max_questions) {
+    
+    local_page_file <- file.path(cache_dir, paste0("list_page_", current_page, ".html"))
+    
+if (file.exists(local_page_file) && !force_refresh) {
+    doc <- htmlParse(local_page_file, isURL = FALSE)
+} else {
+    #get live 
+    live_url <- paste0("https://stats.stackexchange.com/questions?tab=newest&page=", current_page)
+    
+    Sys.sleep(runif(1, 1.5, 3.0)) 
+    
+    download.file(live_url, destfile = local_page_file, quiet = TRUE)
+    doc <- htmlParse(local_page_file, isURL = FALSE)
+}
+    
+    page_links <- xpathSApply(doc, "//a[@class='s-link' and contains(@href, '/questions/')]/@href")
+    if (length(page_links) == 0) break
+    
+    absolute_links <- paste0("https://stats.stackexchange.com", page_links)
+    all_question_urls <- c(all_question_urls, absolute_links)
+    current_page <- current_page + 1
+}
+all_question_urls <- head(all_question_urls, max_questions)
+all_question_urls
+```
+
+```{r, results='asis', echo=FALSE, warning = FALSE, message = FALSE}
+question_dir <- "question_html_cache"
+if (!dir.exists(question_dir)) dir.create(question_dir)
+
+local_file_paths <- character(length(all_question_urls))
+
+for (i in seq_along(all_question_urls)) {
+    url <- all_question_urls[i]
+    #replace special characters in the URL to underscore
+    safe_name <- gsub("[^[:alnum:]]", "_", url)
+    local_file <- file.path(question_dir, paste0(safe_name, ".html"))
+    local_file_paths[i] <- local_file
+    
+    if (!file.exists(local_file) || force_refresh) {
+        Sys.sleep(runif(1, 1.5, 3.0)) 
+      
+        tryCatch({
+            download.file(url, destfile = local_file, quiet = TRUE)
+        }, error = function(e) {
+            message("Error downloading URL: ", url)
+        })
+    }
+}
+```
+
+```{r, results='asis', echo=FALSE, warning = FALSE, message = FALSE}
+safe_value <- function(nodes, xpath, is_numeric = FALSE) {
+    #check if xpath dealing with HTML attribute
+    if (grepl("/@[a-zA-Z]", xpath)) {
+        #return raw
+        val <- xpathSApply(nodes, xpath)
+    } else {
+        #return plain text between HTML tags
+        val <- xpathSApply(nodes, xpath, xmlValue)
+    }
+    if (length(val) == 0 || is.null(val)) return(ifelse(is_numeric, 0, NA_character_))
+    #keep numerical, convert, isolate first 
+    if (is_numeric) return(as.numeric(gsub("[^0-9.-]", "", val[1])))
+    return(trimws(val[1]))
+}
+```
+
+```{r, results='asis', echo=FALSE, warning = FALSE, message = FALSE}
+parse_question_file <- function(file_path) {
+    doc <- htmlParse(file_path, isURL = FALSE)
+    
+    #question
+    q_node <- getNodeSet(doc, "//div[@id='question']")
+    if (length(q_node) == 0) {
+        free(doc)
+        return(NULL)
+    }
+    q_node <- q_node[[1]]
+    q_id <- xmlGetAttr(q_node, "data-questionid", default = NA_character_)
+    
+    title_raw <- xpathSApply(doc, "//a[@class='question-hyperlink']/text()", xmlValue)
+    title <- if(length(title_raw) > 0) title_raw[1] else NA_character_
+    
+    q_text_nodes <- getNodeSet(q_node, ".//div[contains(@class, 'js-post-body')]")
+    q_text <- if(length(q_text_nodes) > 0) paste(xpathSApply(q_text_nodes[[1]], ".//p | .//li | .//code", xmlValue), collapse = " ") else NA_character_
+
+    q_votes <- safe_value(doc, "//div[@id='question']//div[contains(@class, 'js-vote-count')]/@data-value", is_numeric = TRUE)
+    
+    views_raw <- xpathSApply(doc, "//meta[@itemprop='viewCount']/@content")
+    
+    if (length(views_raw) == 0) {
+        views_raw <- xpathSApply(doc, "//div[contains(@class, 'd-flex') and contains(@class, 'fw-wrap')]//div[contains(@title, 'Viewed')]/@title")
+    }
+  
+    q_views <- if(length(views_raw) > 0) as.numeric(gsub("[^0-9]", "", views_raw[1])) else NA_real_
+    q_date <- safe_value(doc, "//time[@itemprop='dateCreated']/@datetime")
+    q_mod <- safe_value(doc, "//a[contains(@href,'lastactivity')]/@title")
+    q_user_node <- getNodeSet(q_node, ".//div[contains(@class, 'post-layout--right')]//div[contains(@class, 'user-info')]")
+    q_user_name <- NA_character_; q_user_rep <- NA_real_; q_badges <- NA_character_
+    if (length(q_user_node) > 0) {
+        asker_card <-   
+        q_user_node[[length(q_user_node)]]
+        q_user_name <- safe_value(asker_card, ".//div[@class='user-details']/a")
+        q_user_rep  <- safe_value(asker_card, ".//span[@class='reputation-score']", is_numeric = TRUE)
+
+        badge_gold   <- length(getNodeSet(asker_card, ".//span[contains(@class,'badge1')]"))
+        badge_silver <- length(getNodeSet(asker_card, ".//span[contains(@class,'badge2')]"))
+        badge_bronze <- length(getNodeSet(asker_card, ".//span[contains(@class,'badge3')]"))
+        q_badges <- paste0(badge_gold, "G / ", badge_silver, "S / ", badge_bronze, "B")
+    }
+    q_user_href <- safe_value(asker_card, ".//div[@class='user-details']/a/@href")
+    q_user_id <- NA_character_
+    if (length(q_user_node) > 0 && exists("asker_card")) {
+        q_user_href <- safe_value(asker_card, ".//div[@class='user-details']/a/@href")
+        q_user_id   <- if(!is.na(q_user_href)) str_extract(q_user_href, "(?<=/users/)\\d+") else NA_character_
+    }
+    
+    #comment count
+    q_comm_visible <- length(getNodeSet(q_node, ".//ul[contains(@class, 'comments-list')]//li[contains(@class, 'comment')]"))
+    
+    hidden_text <- safe_value(q_node, ".//a[contains(@class, 'js-show-link') or contains(text(), 'show') or contains(text(), 'more')]")
+    
+    q_comm_hidden <- 0
+    
+    if (!is.na(hidden_text) && hidden_text != "") {
+        q_comm_hidden <- as.numeric(gsub("[^0-9]", "", hidden_text))
+        if (is.na(q_comm_hidden)) q_comm_hidden <- 0
+    }
+    q_comm_total<-q_comm_visible+q_comm_hidden
+    
+    #code check
+    code_nodes <- getNodeSet(q_node, ".//pre/code")
+    has_code <- length(code_nodes) > 0
+    q_code_text <- NA_character_; q_code_lang <- NA_character_
+    if (has_code) {
+        q_code_text <- paste(sapply(code_nodes, xmlValue), collapse = "\n\n--- next block ---\n\n")
+        raw_langs <- sapply(code_nodes, function(n) xmlGetAttr(n, "class", default = "unknown"))
+        q_code_lang <- paste(raw_langs, collapse = ", ")
+    }
+    
+df_question <- data.frame(
+        question_id = q_id, 
+        title = title, 
+        text = q_text, 
+        votes = q_votes, 
+        views = q_views,
+        date_posted = q_date, 
+        last_modified = q_mod, 
+        user_name = q_user_name, 
+        q_id=q_user_id,
+        reputation = q_user_rep,
+        badges = q_badges,
+        comments_total = q_comm_total, 
+        comments_hidden = q_comm_hidden,
+        comments_visible = q_comm_visible,
+        has_code = has_code, 
+        code_text = q_code_text, 
+        code_language = q_code_lang, 
+        stringsAsFactors = FALSE
+    )
+    
+    #question tags
+    tag_nodes <- xpathSApply(q_node, ".//a[contains(@class, 'post-tag') or contains(@class, 's-tag')]/text()", xmlValue)
+    df_tags <- if(length(tag_nodes) > 0) {
+        data.frame(question_id = q_id, 
+                   tag = tag_nodes, 
+                   stringsAsFactors = FALSE)
+    } else {
+        data.frame(question_id = character(), owner_id = character(), tag = character(), stringsAsFactors = FALSE)
+    }
+    
+    #answers
+    ans_nodes <- getNodeSet(doc, "//div[@id='answers']//div[contains(@class, 'answer')]")
+    list_answers <- list()
+    if (length(ans_nodes) > 0) {
+        for (i in seq_along(ans_nodes)) {
+            a_node <- ans_nodes[[i]]
+            a_id <- xmlGetAttr(a_node, "data-answerid", default = NA_character_)
+            a_text <- safe_value(a_node, ".//div[contains(@class, 'js-post-body')]")
+            a_votes <- safe_value(a_node, ".//div[contains(@class, 'js-vote-count')]/@data-value", is_numeric = TRUE)
+            is_accepted <- !is.null(xmlGetAttr(a_node, "class")) && grepl("accepted-answer", xmlGetAttr(a_node, "class"))
+            a_date <- safe_value(a_node, ".//time[@itemprop='dateCreated']/@datetime")
+            a_last_modified <- safe_value(a_node, ".//a[contains(@href,'revisions')]//span[contains(@class,'relativetime')]/@title")
+            a_comm_count <- length(getNodeSet(a_node, ".//ul[contains(@class, 'comments-list')]//li[contains(@class, 'comment')]"))
+            if (is.na(a_last_modified) || a_last_modified == "") {
+                a_last_modified <- safe_value(a_node, ".//div[contains(@class, 'user-status-modification')]//span/@title")
+            }
+            a_user_name <- NA_character_; 
+            a_user_id <- NA_character_; 
+            a_user_rep <- NA_real_; 
+            a_user_badges <- NA_character_
+            if (is.na(a_last_modified) || 
+                a_last_modified == "") {
+                a_last_modified <- a_date 
+            }
+            
+            a_user_node <- getNodeSet(a_node, ".//div[contains(@class, 'user-info')]")
+            a_user_name <- NA_character_; a_user_rep <- NA_real_; a_user_badges <- NA_character_
+            if (length(a_user_node) > 0) {
+            ans_card <- a_user_node[[length(a_user_node)]]
+            a_user_name <- safe_value(ans_card, ".//div[@class='user-details']/a")
+            a_user_href <- safe_value(ans_card, ".//div[@class='user-details']/a/@href")
+            a_user_id   <- if(!is.na(a_user_href)) str_extract(a_user_href, "(?<=/users/)\\d+") else NA_character_
+            a_user_rep  <- safe_value(ans_card, ".//span[@class='reputation-score']", is_numeric = TRUE)
+            a_badge_counts <- xpathSApply(ans_card, ".//span[contains(@class, 'badge')]//span[@class='badgecount']/text()", xmlValue)
+if (length(a_badge_counts) > 0) a_user_badges <- paste(a_badge_counts, collapse = "/")
+
+            a_gold   <- length(getNodeSet(ans_card, ".//span[contains(@class,'badge1')]"))
+            a_silver <- length(getNodeSet(ans_card, ".//span[contains(@class,'badge2')]"))
+            a_bronze <- length(getNodeSet(ans_card, ".//span[contains(@class,'badge3')]"))
+            a_user_badges <- paste0(a_gold, "G / ", a_silver, "S / ", a_bronze, "B")
+            }
+            
+            a_comm_count <- length(getNodeSet(a_node, ".//li[contains(@class, 'comment')]"))
+            
+            list_answers[[i]] <- data.frame(
+                answer_id = a_id, 
+                question_id = q_id, 
+                text = a_text, 
+                votes = a_votes,
+                is_accepted = is_accepted, 
+                date_posted = a_date, 
+                last_modified = a_last_modified, 
+                user_name = a_user_name, 
+                ans_id = a_user_id, 
+                reputation = a_user_rep, 
+                badges = a_user_badges, 
+                comments_count = a_comm_count,  
+                stringsAsFactors = FALSE
+            )
+        }
+    }
+    df_answers <- if(length(list_answers) > 0) do.call(rbind, list_answers) else data.frame()
+    
+#comments
+comm_nodes <- getNodeSet(doc, "//li[contains(@class, 'comment')]")
+list_comments <- list()
+if (length(comm_nodes) > 0) {
+    for (j in seq_along(comm_nodes)) {
+        c_node <- comm_nodes[[j]]
+        
+        c_text <- safe_value(c_node, ".//span[contains(@class, 'comment-copy')]")
+        c_user <- safe_value(c_node, ".//a[contains(@class, 'comment-user') or @itemprop='author']")
+        
+        c_score <- xmlGetAttr(c_node, "data-comment-score", default = "0")
+        c_rep <- safe_value(c_node, ".//a[contains(@class,'comment-user')]/@title")
+          
+        c_date <- safe_value(c_node, ".//span[contains(@class, 'comment-date')]//span/@title")
+        if (is.na(c_date) || c_date == "") {
+            c_date <- safe_value(c_node, ".//span[contains(@class, 'comment-date')]/a/@title")
+        }
+
+        c_user_href <- safe_value(c_node, ".//a[contains(@class, 'comment-user')]/@href")
+        c_id <- if(!is.na(c_user_href)) {
+            str_extract(c_user_href, "(?<=/users/)\\d+")
+        } else {
+            NA_character_
+        }
+
+        parent_node  <- xmlParent(xmlParent(c_node))
+        is_q_comment <- !is.null(xmlGetAttr(parent_node, "id")) && grepl("question", xmlGetAttr(parent_node, "id"))
+        parent_id    <- if(is_q_comment) q_id else safe_value(c_node, "ancestor::div[contains(@class, 'answer')]/@data-answerid")
+        
+        list_comments[[j]] <- data.frame(
+          question_id = q_id, 
+          type        = ifelse(is_q_comment, "Question", "Answer"),
+          text        = c_text,
+          user_name   = c_user,
+          user_id     = c_id,
+          reputation  = c_rep,
+          score       = c_score,
+          date_string = c_date,
+          stringsAsFactors = FALSE
+          )
+    }
+}
+df_comments <- if(length(list_comments) > 0) do.call(rbind, list_comments) else data.frame()
+    
+    free(doc)
+    return(list(question = df_question, tags = df_tags, answers = df_answers, comments = df_comments))
+}
+```
+
+```{r, results='asis', echo=FALSE, warning = FALSE, message = FALSE}
+all_parsed_outputs <- lapply(local_file_paths, function(path) {
+    if (file.exists(path)) return(parse_question_file(path))
+    return(NULL)
+})
+
+all_parsed_outputs <- all_parsed_outputs[!sapply(all_parsed_outputs, is.null)]
+
+final_questions_table <- bind_rows(lapply(all_parsed_outputs, function(x) x$question))
+final_tags_table      <- bind_rows(lapply(all_parsed_outputs, function(x) x$tags))
+final_answers_table   <- bind_rows(lapply(all_parsed_outputs, function(x) x$answers))
+final_comments_table  <- bind_rows(lapply(all_parsed_outputs, function(x) x$comments))
+
+print(dim(final_questions_table))
+print(dim(final_comments_table))
+print(dim(final_answers_table))
+print(dim(final_tags_table))
+```
+
+```{r, render_tables_new, echo = FALSE, results = 'asis'}
+#limit text to 100 character long preview 
+q_table_preview <- final_questions_table[, c("title", "text", "user_name", "q_id","badges", "reputation","date_posted", "views", "votes", "question_id", "comments_total")] %>%
+        transform(text = substr(text, 1, 40), title = substr(title, 1, 30))
+
+kable(head(sanitize_df_for_latex(q_table_preview)),
+      format = "latex",
+      booktabs = TRUE,
+      caption = "Questions Table") %>%
+  kable_styling(latex_options = c("striped", "scale_down", "hold_position"))
+```
+
+```{r, render_tags_table, echo = FALSE, results = 'asis'}
+#most recent 10
+kable(
+  head(sanitize_df_for_latex(final_tags_table), 10), 
+  format = "latex",
+  booktabs = TRUE,
+  caption = "Tags Table"
+) %>%
+  kable_styling(latex_options = c("striped", "hold_position"))
+```
+
+```{r, results='asis', echo=FALSE, warning = FALSE, message = FALSE}
+kable(head(sanitize_df_for_latex(final_comments_table[, c("question_id", "text", "user_id", "user_name", "reputation", "date_string", "score")]) |>
+        transform(text = substr(text, 1, 100))),
+      caption = "Comments Table")
+```
+
+```{r, results='asis', echo=FALSE, warning = FALSE, message = FALSE}
+#clean NA entries, give text preview 
+answered_table_clean <- final_answers_table[!is.na(final_answers_table$answer_id), ]
+answered_table_clean$text_preview <- substr(answered_table_clean$text, 1, 100)
+
+kable(head(sanitize_df_for_latex(answered_table_clean[, c("text_preview", "user_name", "ans_id", "badges", "reputation", "date_posted", "last_modified", "is_accepted", "votes", "answer_id", "question_id", "comments_count")])),
+      caption = "Answers Table")
+```
+
+```{r, render_tables, echo = FALSE, results = 'asis'}
+#combined table, group by question id 
+tags_collapsed <- final_tags_table %>%
+    group_by(question_id) %>%
+    summarise(tag_list = paste(tag, collapse = ", "), .groups = "drop")
+
+#combine comments 
+comments_collapsed <- final_comments_table %>%
+    group_by(question_id) %>%
+    summarise(
+        text_comment = paste(substr(text, 1, 15), collapse = " | "),
+        score_comment = paste(score, collapse = ", "),
+        .groups = "drop"
+    )
+
+#combine answers, remove duplicates 
+answers_prepped <- final_answers_table %>%
+    filter(!is.na(answer_id) & answer_id != "") %>%
+    distinct(question_id, answer_id, .keep_all = TRUE) %>%
+    rename(
+        text_answer = text,
+        user_name_answer = user_name,
+        reputation_answer = reputation,
+        badges_answer = badges,
+        votes_answer = votes,
+        date_posted_answer = date_posted,
+        last_modified_answer = last_modified
+    )
+
+#left join 
+flat_unified_table <- final_questions_table %>%
+    left_join(tags_collapsed, by = "question_id") %>%
+    left_join(comments_collapsed, by = "question_id") %>%
+    left_join(answers_prepped, by = "question_id", relationship = "many-to-many")
+
+available_cols <- colnames(flat_unified_table)
+
+flat_unified_table <- flat_unified_table %>%
+    mutate(
+        text = if("text" %in% available_cols) substr(text, 1, 20) else "None",
+        text_comment = if("text_comment" %in% available_cols) substr(text_comment, 1, 20) else "No Comments",
+        title = if("title" %in% available_cols) substr(title, 1, 20) else "None",
+        
+#NAs
+text_answer = if("text_answer" %in% available_cols) {
+            ifelse(is.na(text_answer) | text_answer == "", "No Answers", substr(text_answer, 1, 20))
+        } else "No Answers",
+        
+        answer_id = if("answer_id" %in% available_cols) {
+            ifelse(is.na(answer_id), "None", as.character(answer_id))
+        } else "None"
+    )
+
+target_columns <- c(
+    "title", "text", "user_name", "q_id","badges", "reputation", "date_posted", "last_modified","tag_list", "views", "votes","question_id",  "comments_total", "comments_hidden", "text_comment",  "user_name_comment", "user_id_comment", "reputation_comment", "date_string_comment", "score_comment", "text_answer", "user_name_answer", "ans_id", "badges_answer", "reputation_answer","date_posted_answer", "last_modified_answer", "is_accepted", "votes_answer", "answer_id", "q_id", "comments_count"
+)
+
+columns_to_show <- intersect(target_columns, available_cols)
+
+kable(head(sanitize_df_for_latex(flat_unified_table[, columns_to_show]), 10), 
+      format = "latex",
+      booktabs = TRUE,
+      caption = "Combined Table") %>%
+  kable_styling(latex_options = c("striped", "scale_down", "hold_position"))
+```
+
+```{r, echo=FALSE, warning = FALSE, message = FALSE}
+#checking for code blocks
+for (file_idx in seq_along(local_file_paths)) {
+    path <- local_file_paths[file_idx]
+    if (!file.exists(path)) next
+    
+    doc <- htmlParse(path, isURL = FALSE)
+    
+    q_node <- getNodeSet(doc, "//div[@id='question']")
+    if (length(q_node) > 0) {
+        q_node <- q_node[[1]]
+        q_id <- xmlGetAttr(q_node, "data-questionid", default = "UNKNOWN")
+        q_title <- safe_value(doc, "//a[@class='question-hyperlink']/text()")
+        
+        q_code_nodes <- getNodeSet(q_node, ".//pre/code")
+        
+cat(sprintf("FILE [%d]: Q-ID: %s | Title: '%s'\n", file_idx, q_id, substr(q_title, 1, 50)))
+if (length(q_code_nodes) > 0) {
+            q_lang <- xmlGetAttr(q_code_nodes[[1]], "class", default = "no-lang-tag")
+            cat(sprintf("   --> [!] Question has code blocks: %d | First Lang: %s\n", length(q_code_nodes), q_lang))
+clean_q_snippet <- gsub("\\\\", "", xmlValue(q_code_nodes[[1]]))
+cat(sprintf("       Snippet: %s\n", gsub("\n", " ", substr(clean_q_snippet, 1, 80))))
+        } else {
+            cat("  --> Question has no code blocks.\n")
+        }
+    }
+  
+    ans_nodes <- getNodeSet(doc, "//div[@id='answers']//div[@data-answerid]")
+    
+    if (length(ans_nodes) > 0) {
+        cat(sprintf("  --> Found %d answer:\n", length(ans_nodes)))
+        
+        for (a_idx in seq_along(ans_nodes)) {
+            a_node <- ans_nodes[[a_idx]]
+            a_id <- xmlGetAttr(a_node, "data-answerid", default = "UNKNOWN")
+            
+            a_code_nodes <- getNodeSet(a_node, ".//pre/code")
+            
+            if (length(a_code_nodes) > 0) {
+                a_lang <- xmlGetAttr(a_code_nodes[[1]], "class", default = "no-lang-tag")
+                cat(sprintf("       - Answer [%s]: has code blocks | First Lang: %s\n", a_id, a_lang))
+clean_a_snippet <- gsub("\\\\", "", xmlValue(a_code_nodes[[1]]))
+cat(sprintf("         Snippet: %s\n", gsub("\n", " ", substr(clean_a_snippet, 1, 80))))
+            } else {
+                cat(sprintf("      - Answer [%s]: has no code blocks.\n", a_id))
+            }
+        }
+    } else {
+        cat("  --> No answers posted.\n")
+    }
+    
+    free(doc)
+}
+```
+
+Describe how to arrange the results in a form that we can analyze it and address questions similar to assignment 3.
+
+We can use the question id as a primary key across questions, user id as foreign key. Analyze views, votes, and date. 
+
+Across tags, question id as foreign key, linking it to the questions, its parent thread.
+
+Use the answer id as a primary key across answers, question id as foreign key, linking it to the questions, its parent thread. Analyze acceptance, votes, and date. 
+
+Across comments, question id as foreign key, linking it to the questions, its main parent thread. If there's an answer id to it, its linked to the answer, if not, it links directly to the question. Analyze score and date. 
+
+To analyze and address questions similar to assignment 3, we can join tables and mimic that of relational databases. Some relations we can study is that between question post time and votes/views, post time and average speed of answer/comment responses, number of tags and view count, Answer acceptance and vote count. We can also analyze relation between user information and quality of their output, whether users with higher reputation and better badges post questions with more votes and views, answers with more acceptance and votes, and comments with higher scores. 
+
+For the question count, I initially wanted to find sum by using  page count and question per page number, but this is inefficient as we'd deal with the constantly updated and changing of numbers, especially on the last page. In the end, I use the text on the front page and scrape it out as a integer to answer said question. 
+
+I initially ran into the error having parse_question_file return only null because of the absolute_links, pasting Markdown formatted hyperlink string as a literal prefix instead of base URL. 
+
+I couldn't get the updated and last modified time correctly and had to revisit. 
+
+After running into empty string returns, I chose to set default NA_character_ for q_id and a_id to avoid said issue. 
+
+I originally used a count system for badge status but this was too weak, its been later updated to be a counter between the three tiers, showing a count for all three as a gold badge owner, also good for us to do validations on. 
+
+I was using downloaded HTML pages stored in my dictionary, I later added force_refresh to update with live web data. 
+
+I used Gemini, chat link: https://gemini.google.com/app/4974e4a114a85d5f
+
+With Gemini, I gave verbal descriptions of what I want to achieve and ask it for code samples and suggestions, I check the code output by trying it and visualizing output segment by segment, I also ask it to explain the output code line by line so I'm not just copy pasting, but learning the code and understanding each line and function's purpose. 
+
+There were many redundancies in code that was given as feedback, I also made changes to the code to better fit the structure of the data, edited and reformatted for personal consistency and preference, removing identical library blocks and data blocks. 
+
+Some validation methods include manually comparing random specific questions to the website information, having both visible and invisible comment counts to validate total comment count, having the combined table where we can visualize comment and answer matching up with questions by id, also to see if there are any unreasonable NAs. 
+
+Validation below checks if questions having higher votes is correlated with having more views.
+
+```{r, results='asis', echo=FALSE, warning = FALSE, message = FALSE}
+if(nrow(final_questions_table) > 1) {
+  correlation <- cor(final_questions_table$votes, final_questions_table$views, use = "complete.obs")
+  cat(sprintf("Correlation between Question Votes and Views: %.3f\n", correlation))
+  if(correlation > 0) {
+    cat("  --> Pass: Positive alignment\n\n")
+  } else {
+    cat("  --> Fail: Flat or negative trend\n\n")
+  }
+}
+```
+
+Validation below checks if users answering more questions correlate with scoring higher on average.
+
+```{r, results='asis', echo=FALSE, warning = FALSE, message = FALSE}
+user_quality_profile <- final_answers_table %>%
+  filter(!is.na(user_name) & user_name != "") %>%
+  group_by(user_name) %>%
+  summarise(
+    answers_provided = n(),
+    avg_answer_score = mean(votes, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  arrange(desc(avg_answer_score), desc(answers_provided)) %>%
+  head(10) 
+
+print(as.data.frame(user_quality_profile))
+```
+
+I worked on this assignment on and off throughout the weeks, around 2 hours everyday since the Tuesday before the deadline.
+
+```{r, results='asis', echo=FALSE}
+cat("\\newpage") #new page
+```
+
+# Appendix: R code
+
+```{r, print_appendix, ref.label=knitr::all_labels(), echo=TRUE, eval=FALSE}
+```

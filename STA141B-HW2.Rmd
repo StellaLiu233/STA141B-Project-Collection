@@ -1,0 +1,296 @@
+---
+title: "STA141B-HW2"
+author: "Stella Liu"
+date: "2026-04-29"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r, results='asis', echo=FALSE, warning = FALSE, message = FALSE}
+set.seed(1)
+```
+
+Assignment 2: Reading Computer Log files
+
+```{r, results='asis', echo=FALSE}
+computer_log = readLines("MergedAuth.log")
+# check to understand data strcture 
+computer_log[4]
+computer_log[5]
+```
+
+### Find which lines match this general description of the metadata and also characterize the lines that don’t match. Be as inclusive as makes sense.
+
+```{r, results='asis', echo=FALSE}
+#line begins at #, identify headers and extract
+is_header <- grepl("^#", computer_log)
+log_names <- sub("^#\\s*", "", computer_log[is_header])
+
+#grouping ID, cumsum for each header 
+log_id <- cumsum(is_header)
+
+#NA vector, fill in for valids
+log_file_full <- rep(NA_character_, length(computer_log))
+
+#map those greater than 0
+has_header_assigned <- log_id > 0
+log_file_full[has_header_assigned] <- log_names[log_id[has_header_assigned]]
+
+#create dataframe
+df_raw <- data.frame(
+  line = computer_log, 
+  log_source = log_file_full, 
+  stringsAsFactors = FALSE
+)
+
+df_clean <- df_raw[!is_header, ]
+```
+
+### Create a data.frame with a row for each actual log message line, with the variables
+• date-time,
+• the name of the host collecting the log messages,
+• the app(lication),
+• the process identifier (PID),
+• the message, i.e, the remainder of the log line,
+• the name of the log file from which the line came, e.g. auth.log.
+
+```{r, results='asis', echo=FALSE}
+#parse: timestamp, host, app, PID, message
+pattern <- "^([A-Z][a-z]{2} +[0-9]{1,2} +[0-9:]{8}) +([^ ]+) +([^\\[]+)\\[([0-9]+)\\]: (.*)$"
+data_lines <- df_clean$line
+
+#extract groups
+m <- regexec(pattern, data_lines)
+matches <- regmatches(data_lines, m)
+
+#build data frame, check length for no matches 
+df <- do.call(rbind, lapply(matches, function(x) {
+  if(length(x) == 6) return(x[-1])
+  else return(rep(NA, 5))
+}))
+
+#combine into dataframe
+df_final <- as.data.frame(df, stringsAsFactors = FALSE)
+colnames(df_final) <- c("datetime", "host", "app", "pid", "message")
+
+df_final$log_file_full <- df_clean$log_source  
+
+#lines that did not match
+bad_lines <- data_lines[sapply(matches, length) != 6]
+bad_lines[2:4]
+```
+
+Use general description: timestamp, host, app, PID, and message to match lines. 
+
+Lines that did not match include empty entries and ones with different structures and different formats. For example second line has PID systemd: instead of in the usual bracket format, pam_unix() also contains different content. Similarly, the third line is in sudo log format, also structurally different.
+
+When we come across lines that don't fit this format, we characterize them as systemd entries and sudo logs instead of ignoring them, collecting them as a separate data structure and extracting directly from the raw string later on.
+
+
+Data Validation and Exploration 
+
+• How many log files are there? What are their names?
+
+```{r, results='asis', echo=FALSE}
+#number of unique non NA log files
+length(unique(na.omit(df_final$log_file_full)))
+unique(na.omit(df_final$log_file_full))
+```
+
+There are 5 non-NA log files, as listed above they are "auth.log", "auth2.log", "loghub/Linux/Linux_2k.log", "loghub/Mac/Mac_2k.log", and "loghub/OpenSSH/SSH_2k.log". 
+
+• Verify that the PIDs are all numbers.
+
+```{r, results='asis', echo=FALSE}
+#check non NA PIDs to be numerical
+only_pids <- df_final$pid[!is.na(df_final$pid)]
+all(grepl("^[0-9]+$", only_pids))
+```
+
+• How many lines are in each log file?
+
+```{r, results='asis', echo=FALSE}
+#number of lines per log file
+table(df_final$log_file_full)
+summary_table <- as.data.frame(table(df_final$host))
+colnames(summary_table) <- c("Host name", "Log number")
+summary_table <- summary_table[order(-summary_table$`Log number`), ]
+head(summary_table)
+```
+
+• What are the range of date-times for the messages? for each of the different log files in the combined file? How many days does each log file span?
+
+```{r, results='asis', echo=FALSE}
+#convert time
+df_final$time <- as.POSIXct(trimws(df_final$datetime), format="%b %d %H:%M:%S")
+
+#range
+by(df_final$time, df_final$log_file_full, range, na.rm = TRUE)
+
+#day 
+by(df_final$time, df_final$log_file_full, function(x) {
+  r <- range(x, na.rm = TRUE)
+  as.numeric(diff(r), units = "days")
+})
+```
+
+We unify the units to be in days instead of including values in both days and hours. 
+
+• Do the application names contain numbers? If so, are they just versions, e.g. ssh2, or is there additional structure to the numbers?
+
+```{r, results='asis', echo=FALSE}
+#app containing numbers
+apps_with_nums <- df_final$app[grepl("[0-9]", df_final$app)]
+unique(apps_with_nums)
+```
+
+Application names does contain numbers, for example "BezelServices 255.10" has element 255.10 that is a version structure. 
+
+• Is the host value constant/the same for all records in each log file?
+
+```{r, results='asis', echo=FALSE}
+#host consistency per log
+by(df_final$host, df_final$log_file_full, function(x) length(unique(x)))
+```
+
+The host value is not constant in each log file. In every log file besides SSH_2k.log, there are multiple machines with unique host numbers being more than 1.
+
+• What are the most common apps (daemons/programs) that are logging information on each of the different hosts?
+
+```{r, results='asis', echo=FALSE}
+#top 5 most common
+sort(table(df_final$app), decreasing = TRUE)[1:5]
+```
+
+The top 5 most common apps are sshd, CRON, ftpd, kernel, and sshd(pam_unix). The most common app is sshd with 91,341 unique entries.
+
+```{r, results='asis', echo=FALSE}
+#unique app per host
+tapply(df_final$app, df_final$host, function(x) length(unique(x)))
+```
+
+• How many unique logging hosts look like IP addresses? List the most common ones.
+
+```{r, results='asis', echo=FALSE}
+ip_like_regex <- "ip-[0-9]{1,3}-[0-9]{1,3}-[0-9]{1,3}-[0-9]{1,3}"
+
+ip_hosts_all <- df_final$host[grepl(ip_like_regex, df_final$host)]
+unique_ip_hosts <- unique(ip_hosts_all)
+
+length(unique_ip_hosts)
+sort(table(ip_hosts_all), decreasing = TRUE)
+```
+
+There are 2 unique logging hosts that look like IP addresses, most common ones being ip-172-31-27-153 and ip-10-77-20-248.
+
+Logins - valid and invalid 
+
+• Find all valid/successful logins
+– What are the user names and Internet Protocol (IP) addresses of those logins
+
+• Find the invalid user login/ids
+– What were the associated IP addresses?
+– Were there multiple invalid user logins from the same IP addresses?
+– Were there valid logins from those IP addresses?
+– Are there multiple IPs using the same invalid login?
+
+```{r, results='asis', echo=FALSE}
+#valid 
+valid_logins <- df_final[grepl("Accepted", df_final$message), ]
+user <- sub(".*for ([^ ]+) from.*", "\\1", valid_logins$message)
+ip <- sub(".*from ([0-9\\.]+).*", "\\1", valid_logins$message)
+
+#invalid
+invalid_logins <- df_final[grepl("Invalid user|Failed password", df_final$message), ]
+user_bad <- sub(".*Invalid user ([^ ]+) from.*", "\\1", invalid_logins$message)
+ip_bad <- sub(".*from ([0-9\\.]+).*", "\\1", invalid_logins$message)
+
+#extract IP
+ip_in_msg_regex <- "\\d{1,3}(\\.\\d{1,3}){3}"
+invalid_ips <- regmatches(invalid_logins$message, regexpr(ip_in_msg_regex, invalid_logins$message))
+
+#invalid from same IP
+ip_summary <- as.data.frame(table(ip_bad))
+head(ip_summary)
+
+#invalid across IPs
+user_summary <- as.data.frame(table(user_bad))
+head(user_summary)
+
+#5 most invalid
+sort(table(ip_bad), decreasing = TRUE)[1:5]
+```
+
+5 most frequent invalid IP's are the above listed.
+
+```{r, results='asis', echo=FALSE}
+#check overlap, return IP address that gives TRUE
+unique(ip_bad[ip_bad %in% ip])
+```
+
+After checking, there were overlaps between valid and invalid IPs, specifically at "85.245.107.41" "127.0.0.1" and "24.151.103.17", returning TRUE for the overlap check, appearing in both. Thus we conclude there were valid logins from those invalid IP addresses.
+
+• Are these related IPs, e.g., from the same network/domain?
+
+We notice that IP addresses that are in similar cluster ranges experience multiple repeated unauthorized access attempts, suggesting that these related IPs are from the same network, related by network proximity.
+
+```{r, results='asis', echo=FALSE}
+#extract IP
+fail <- df_final[grepl("maximum authentication attempts exceeded", df_final$message), ]
+(sub(".*from ([0-9\\.]+).*", "\\1", fail$message))
+```
+
+• What IP address had too many authentication failures?
+
+```{r, results='asis', echo=FALSE}
+#most authentication failures
+tail(sort(table(ip_bad)), 1)
+```
+
+The most authentication failures occurs at 61.197.203.243, happening 409 times.
+
+
+Sudo commands
+
+• What are the executables/programs run via sudo
+– By what user
+– What machine are they on?
+
+```{r, results='asis', echo=FALSE}
+#find sudo rows
+sudo_idx <- grepl("sudo:", df_clean$line)
+raw_sudo_lines <- df_clean$line[sudo_idx]
+
+#extract from raw, format sudo pattern
+sudo_user <- sub(".*sudo:\\s+([^:]+):.*","\\1",raw_sudo_lines)
+sudo_mach <- df_clean$log_source[sudo_idx]
+sudo_exec <- sub(".*COMMAND=(.*)", "\\1", raw_sudo_lines)
+
+sudo_results <- data.frame(
+  user = sudo_user,
+  machine = sudo_mach,
+  executable = sudo_exec,
+  stringsAsFactors = FALSE
+)
+
+#clean those wo commands
+sudo_results <- sudo_results[grepl("/", sudo_results$executable), ]
+
+head(sudo_results)
+```
+
+We choose to get data directly from the raw strings for accuracy since there is data structure difference between sudo logs and standard logs.
+
+```{r, results='asis', echo=FALSE}
+cat("\\newpage") #new page
+```
+
+# Appendix: R code
+
+```{r, ref.label=knitr::all_labels(),echo=TRUE,eval=FALSE}
+```

@@ -1,0 +1,299 @@
+---
+title: "STA141B-HW4"
+author: "Stella Liu"
+date: "2026-05-26"
+output:
+  pdf_document:
+    latex_engine: xelatex
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r, results='asis', echo=FALSE, warning = FALSE, message = FALSE}
+library(httr2)
+library(jsonlite)
+library(knitr)
+```
+
+Assignment 4: 
+
+1. Get the information in the “table” on this page, i.e., the data for the Likely Democratic, Competitive States, Likely Republican for the presidential election.
+
+```{r, results='asis', echo=FALSE, warning = FALSE, message = FALSE}
+#retrieve response from web link network while stimulating standard browser interface
+pre_url <- "https://apps.npr.org/2024-election-results/data/president.json"
+req <- request(pre_url) %>% req_user_agent("Mozilla/5.0")
+resp <- req_perform(req)
+
+#binary network signal into active nested R list text strings 
+master_list <- fromJSON(resp_body_string(resp))
+df_results <- master_list$results
+names(df_results)
+unique(df_results$rating)
+```
+
+```{r, results='asis', echo=FALSE, warning = FALSE, message = FALSE}
+likely_dem <- subset(df_results, rating %in% c("likely-d", "lean-d"))
+competitive <- subset(df_results, rating == "toss-up")
+likely_rep <- subset(df_results, rating %in% c("likely-r", "lean-r"))
+
+print(likely_dem[, c("stateName", "rating")])
+print(competitive[, c("stateName", "rating")])
+print(likely_rep[, c("stateName", "rating")])
+```
+
+2. For each state,
+• for the presidential election,
+– get the “Demographics by County” information,
+– create the table for the overall result for the state.
+
+```{r, results='asis', echo=FALSE, warning = FALSE, message = FALSE}
+df_results_pres <- fromJSON(resp_body_string(resp))$results
+distinct_states <- df_results_pres[!duplicated(df_results_pres$state), ]
+
+#state by state cycle for presidential 
+for (i in 1:nrow(distinct_states)) {
+  #identification flags
+  st_name <- distinct_states$stateName[i]
+  st_code <- toupper(df_results_pres$state[i])
+  
+  if (st_code == "US" || st_code == "") next
+  
+  cat("\n## ", st_name, " Presidential Results\n")
+  
+  state_overall_votes <- df_results_pres$candidates[[i]]
+  cat("#### Overall State Totals\n")
+  
+  if (!is.null(state_overall_votes) && "votes" %in% names(state_overall_votes)) {
+    total_state_votes <- sum(as.numeric(state_overall_votes$votes), na.rm = TRUE)
+    
+    if (total_state_votes > 0) {
+      #calculate percentage for each
+      state_overall_votes$percentage <- paste0(
+        round((as.numeric(state_overall_votes$votes) / total_state_votes) * 100, 1), "%"
+      )
+    } else {
+      state_overall_votes$percentage <- "0.0%"
+    }
+    
+    print(kable(head(state_overall_votes[, c("last", "party", "votes", "percentage")], 5), row.names = FALSE))
+  }
+
+#overall validation
+if (!is.null(state_overall_votes) && "votes" %in% names(state_overall_votes)) {
+  
+  total_votes <- sum(as.numeric(state_overall_votes$votes), na.rm = TRUE)
+  percents <- as.numeric(gsub("%", "", state_overall_votes$percentage))
+  
+  cat("**Overall Validation Checks:**\n")
+  
+  cat("- Percent sum:", round(sum(percents, na.rm = TRUE), 1), "%\n")
+  
+  cat("- Total Overall Votes:", total_votes, "\n\n")
+}
+  
+  #use state code for specialized URL
+  state_url <- paste0("https://apps.npr.org/2024-election-results/data/counties/", st_code, "-0.json")
+  
+  #protective: if missing return null
+  state_data <- tryCatch({
+    fromJSON(resp_body_string(req_perform(req_user_agent(request(state_url), "Mozilla/5.0"))))
+  }, error = function(e) { NULL })
+  
+  #verify data integrity 
+  raw_df <- if (!is.null(state_data)) state_data$results else NULL
+  
+  #filter rows with indicator p for presidential, track county
+  if (!is.null(raw_df) && is.data.frame(raw_df)) {
+    sub_df <- raw_df[trimws(tolower(raw_df$office)) == "p" & trimws(tolower(raw_df$level)) == "county", ]
+    if (nrow(sub_df) == 0) sub_df <- raw_df[raw_df$level == "county" | !is.null(raw_df$reportingunitName), ]
+    
+    #table of demographic variables
+    if (nrow(sub_df) > 0 && !is.null(sub_df$county)) {
+      clean_demographics <- data.frame(
+        County       = if(!is.null(sub_df$county$countyName)) sub_df$county$countyName else sub_df$reportingunitName,
+        Median_Income       = if(!is.null(sub_df$county$median_income)) sub_df$county$median_income else NA,
+        Black_Pop    = if(!is.null(sub_df$county$black_total)) sub_df$county$black_total else NA,
+        Hispanic_Pop = if(!is.null(sub_df$county$hispanic_total)) sub_df$county$hispanic_total else NA,
+        Votes        = if(!is.null(sub_df$totalVotes)) sub_df$totalVotes else NA,
+        stringsAsFactors = FALSE
+      )
+      #remove missing 
+      clean_demographics <- clean_demographics[!is.na(clean_demographics$County), ]
+      
+      cat("\n#### County Demographics\n")
+      print(kable(head(clean_demographics, 5), row.names = FALSE))
+      
+#county validation
+if (!is.null(clean_demographics) && nrow(clean_demographics) > 0) {
+  
+  cat("**County Validation Checks:**\n")
+  
+  cat("- Total County Votes:", sum(clean_demographics$Votes, na.rm = TRUE), "\n")
+  
+  cat("\n")
+}
+    #protective: if missing return message 
+    } else {
+      cat("\n*Demographic columns missing inside this file structure.*\n")
+    }
+  } else {
+    cat("\n*Network dataset could not be pulled.*\n")
+  }
+  cat("\n---\n")
+}
+```
+
+• same for the Senate elections.
+– “Demographic by County” information
+– overall result for the states
+
+```{r, results='asis', echo=FALSE, warning=FALSE, message=FALSE}
+sen_url <- "https://apps.npr.org/2024-election-results/data/senate.json"
+req1 <- request(sen_url) %>% req_user_agent("Mozilla/5.0")
+resp1 <- req_perform(req1)
+master_list1 <- fromJSON(resp_body_string(resp1))
+
+#check structural variation 
+if ("races" %in% names(master_list1)) {
+  df_results1 <- master_list1$races
+} else if ("results" %in% names(master_list1)) {
+  df_results1 <- master_list1$results
+} else {
+  df_results1 <- master_list1
+}
+
+#protective: if missing return message
+if (!is.data.frame(df_results1) || nrow(df_results1) == 0) {
+  cat("### No race data found.\n")
+  knitr::knit_exit()
+}
+
+#state by state cycle for senate 
+for (i in seq_len(nrow(df_results1))) {
+  race <- df_results1[i, ]
+
+  st_name <- if (!is.null(race$stateName) && !is.na(race$stateName)) race$stateName else race$state
+
+  cat(paste0("\n## ", st_name, " Senate Results\n"))
+
+  #candidate count
+  cands <- race$candidates
+  if (is.list(cands) && length(cands) > 0) {
+    if (!is.data.frame(cands)) cands <- as.data.frame(do.call(rbind, cands))
+    
+    if ("votes" %in% names(cands)) {
+      total_senate_votes <- sum(as.numeric(cands$votes), na.rm = TRUE)
+      
+      if (total_senate_votes > 0) {
+        #calculate percentage for each
+        cands$percentage <- paste0(
+          round((as.numeric(cands$votes) / total_senate_votes) * 100, 1), "%"
+        )
+      } else {
+        cands$percentage <- "0.0%"
+      }
+    }
+    
+    valid_cols <- intersect(names(cands), c("last", "party", "votes", "percentage", "winner"))
+    
+    if (length(valid_cols) > 0) {
+      cat("#### Overall State Totals\n")
+      print(kable(head(cands[, valid_cols, drop = FALSE], 6),
+                  row.names = FALSE, format = "markdown"))
+    }
+  }
+
+#overall validation
+if (!is.null(cands) && "votes" %in% names(cands)) {
+  
+  total_votes <- sum(as.numeric(cands$votes), na.rm = TRUE)
+  percents <- as.numeric(gsub("%", "", cands$percentage))
+  
+  cat("**Overall Validation Checks:**\n")
+  
+  cat("- Percent sum:", round(sum(percents, na.rm = TRUE), 1), "%\n")
+  
+  cat("- Total votes:", total_votes, "\n\n")
+}
+
+  #identification flags
+  st_code_sen <- toupper(race$state)
+  race_id     <- race$id
+
+  #use state code and race id for specialized URL
+  state_url_sen <- paste0(
+    "https://apps.npr.org/2024-election-results/data/counties/",
+    st_code_sen, "-", race_id, ".json"
+  )
+  
+  #protective: if missing return null
+  state_data <- tryCatch({
+    req_sen <- request(state_url_sen) %>% req_user_agent("Mozilla/5.0")
+    fromJSON(resp_body_string(req_perform(req_sen)))
+  }, error = function(e) NULL)
+
+  raw_df_sen <- if (!is.null(state_data)) state_data$results else NULL
+
+  #both country and township level tracking 
+  if (!is.null(raw_df_sen) && is.data.frame(raw_df_sen)) {
+    sub_df_sen <- raw_df_sen[!trimws(tolower(raw_df_sen$level)) %in% c("state", "national", "us"), ]
+    
+    #table of demographic variables 
+    if (nrow(sub_df_sen) > 0 && "county" %in% names(sub_df_sen) && !is.null(sub_df_sen$county)) {
+      clean_demographics_sen <- data.frame(
+        'County/Township' = if (!is.null(sub_df_sen$county$countyName)) sub_df_sen$county$countyName else sub_df_sen$reportingunitName,
+        Income       = if (!is.null(sub_df_sen$county$median_income)) sub_df_sen$county$median_income else NA,
+        Black_Pop    = if (!is.null(sub_df_sen$county$black_total)) sub_df_sen$county$black_total else NA,
+        Hispanic_Pop = if (!is.null(sub_df_sen$county$hispanic_total)) sub_df_sen$county$hispanic_total else NA,
+        Votes        = if (!is.null(sub_df_sen$totalVotes)) sub_df_sen$totalVotes else NA,
+        stringsAsFactors = FALSE
+      )
+
+      #protective: if missing return message 
+      if (nrow(clean_demographics_sen) > 0) {
+        cat("\n#### County/Township Demographics\n")
+        print(kable(head(clean_demographics_sen, 5),
+                    row.names = FALSE, format = "markdown"))
+        
+#county validation
+if (!is.null(clean_demographics_sen) && nrow(clean_demographics_sen) > 0) {
+  
+  cat("**County Validation Checks:**\n")
+  
+  cat("- Total County Votes:", sum(clean_demographics_sen$Votes, na.rm = TRUE), "\n")
+  
+  cat("\n")
+}
+        
+      } else {
+        cat("\n*No demographic available for this state.*\n")
+      }
+    } else {
+      cat("\n*Demographic missing for this state.*\n")
+    }
+  } else {
+    cat(paste0("\n*Failed to parse for ", st_name, ".*\n"))
+  }
+
+  cat("\n---\n")
+}
+```
+
+I used Gemini, chat link: https://gemini.google.com/app/933ebbb21f235908
+
+I input verbal descriptions of what I want to achieve and ask it for brainstorming ideas and approaches. I check the code output by trying it and visualizing output segment by segment, I also ask it to explain the output code line by line so I'm not blindly copy pasting, but learning the code and understanding each line and function's purpose. 
+There were many redundancies in code that was given as feedback, I also made changes to the code to better fit the structure of the data. I also often edited and reformatted for personal consistency and preference, removing identical library blocks and data blocks. 
+Some errors I've encountered and fixed, I first failed to take into consideration that for senate results, some states had township instead of county, which was later updated with a new sub_df_sen line. I later decided to include the winner and percentage for each overall state total tables, this way we can also validate that there is one winner among all the candidates, and that the percentage adds up to 100%. I also validated by double checking between sites for accurate information and representation.
+I worked on this assignment on and off throughout the weeks, intensifying to around 5 hours everyday since the Friday before the deadline.
+
+```{r, results='asis', echo=FALSE}
+cat("\\newpage") #new page
+```
+
+# Appendix: R code
+
+```{r, ref.label=knitr::all_labels(),echo=TRUE,eval=FALSE}
+```

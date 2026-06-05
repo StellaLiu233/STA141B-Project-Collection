@@ -1,0 +1,9 @@
+SELECT 
+  SUM(CASE WHEN Title LIKE '%Neural network%' OR Body LIKE '%Neural network%' THEN 1 ELSE 0 END) as NeuralNetwork,
+  SUM(CASE WHEN Title LIKE '%ANOVA%' OR Body LIKE '%ANOVA%' THEN 1 ELSE 0 END) as ANOVA,
+  SUM(CASE WHEN Title LIKE '%Classification tree%' OR Body LIKE '%Classification tree%' THEN 1 ELSE 0 END) as ClassificationTree,
+  SUM(CASE WHEN Title LIKE '%Boosting%' OR Body LIKE '%Boosting%' THEN 1 ELSE 0 END) as Boosting,
+  SUM(CASE WHEN Title LIKE '%Bagging%' OR Body LIKE '%Bagging%' THEN 1 ELSE 0 END) as Bagging,
+  SUM(CASE WHEN Title LIKE '%Clustering%' OR Body LIKE '%Clustering%' THEN 1 ELSE 0 END) as Clustering,
+  SUM(CASE WHEN Title LIKE '%Multiple testing%' OR Body LIKE '%Multiple testing%' THEN 1 ELSE 0 END) as MultipleTesting
+FROM Posts WHERE PostTypeId = 1;

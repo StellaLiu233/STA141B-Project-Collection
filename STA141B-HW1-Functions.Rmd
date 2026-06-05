@@ -1,0 +1,126 @@
+---
+title: "STA141B-HW1-Functions"
+author: "Stella Liu"
+date: "2026-04-13"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r, results='asis', echo=FALSE, warning = FALSE, message = FALSE}
+set.seed(1)
+```
+
+Assignment 1 (Functions)
+
+```{r, results='asis', echo=FALSE}
+ff <- list.files("C:/Users/stela/Downloads/UCD Class/STA141B/",pattern="\\.gz$",full.names = TRUE)
+ff[1]
+```
+
+```{r, results='asis', echo=FALSE}
+offline_data = readLines(ff[1])
+# check to understand data strcture 
+offline_data[1]
+offline_data[5]
+```
+
+```{r, results='asis', echo=FALSE}
+#function
+readWirelessDataset=function(path) {
+  x=readLines(gzfile(path))
+  
+  #empty for storing
+  all_rows=list()
+  all_cols=c()
+
+  parsed_rows=list()
+
+  #loop for each scan obs
+  for (i in seq_along(x)){
+    
+    #if empty, skip
+    if (nchar(x[i])==0) next
+    
+    #split by ; between elements
+    parts <- strsplit(x[i], ";")[[1]]
+    #split by = between value title and value content 
+    kv <- strsplit(parts,"=", fixed=TRUE)
+
+    #take out value titles and content as characters 
+    keys <- sapply(kv, function(z) z[1])
+    vals <- sapply(kv, function(z) if (length(z) > 1) as.character(z[2]) else NA_character_)
+
+    #skip line if missing time and id
+    if (!any(keys=="t")||!any(keys=="id")) next
+
+    #create base while suppressing warning
+    row=list(
+      time   = suppressWarnings(as.numeric(vals[keys == "t"])),
+      id     = vals[keys == "id"],
+      pos    = vals[keys == "pos"],
+      degree = suppressWarnings(as.numeric(vals[keys == "degree"]))
+    )
+
+    #the rest is for wifi signal, mac ID
+    mac_idx <- !(keys %in% c("t", "id", "pos", "degree"))
+
+    if (any(mac_idx)) {
+      
+      #take out value titles and content
+      mac_keys <- keys[mac_idx]
+      mac_vals <- vals[mac_idx]
+      
+      #loop for each entry
+      for (j in seq_along(mac_keys)) {
+        
+        #create column name
+        col_name <- paste0("signal_", mac_keys[j])
+
+        #convert content to character string
+        val=as.character(mac_vals[j])
+
+        #split by , 
+        #convert to numerical, suppress warning, assign NA if empty
+        if (!is.na(val) && val != "") {
+          signal_parts <- strsplit(val, ",")[[1]]
+          row[[col_name]] <- suppressWarnings(as.numeric(signal_parts[1]))
+        } else {
+          row[[col_name]]=NA
+        }
+        all_cols <- unique(c(all_cols, col_name))
+      }
+    }
+    
+    #store all rows to list
+    parsed_rows[[length(parsed_rows) + 1]]=row
+  }
+
+  #combine into data frame
+  df <- do.call(rbind, lapply(parsed_rows, function(r) {
+    #assign NA if row missing a column
+    for (col in all_cols) {
+      if (!col %in% names(r)) r[[col]]=NA
+    }
+    as.data.frame(r, stringsAsFactors=FALSE)
+  }))
+
+  #clean row names
+  rownames(df)=NULL
+
+  return(df)
+}
+```
+
+```{r, results='asis', echo=FALSE}
+cat("\\newpage") #new page
+```
+
+# Appendix: R code
+
+```{r, ref.label=knitr::all_labels(),echo=TRUE,eval=FALSE}
+```
